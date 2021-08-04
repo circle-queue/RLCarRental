@@ -8,7 +8,7 @@ from itertools import product, accumulate
 from copy import deepcopy
 from scipy.stats import poisson
 
-np.set_printoptions(threshold=1000, linewidth=200)
+np.set_printoptions(threshold=1000, linewidth=200, precision=2, suppress=True)
 
 def pois(n, y, cache={}):
 	if y not in cache:
@@ -29,8 +29,8 @@ class Agent:
 		P_sale_j = poisson.pmf(range(21), mu=4).reshape(1, 21)
 		P_sale = np.ones((21, 21))*P_sale_i*P_sale_j
 
-		cars_sold = np.arange(21).reshape((21, 1)) \ 
-				  + np.arange(21).reshape((1, 21))
+		cars_sold = np.arange(21).reshape((21, 1)) \
+					+ np.arange(21).reshape((1, 21))
 		R_sale = R_RENT * cars_sold
 		
 		# Selling 5 cars means you can also sell 4, 3, ...
@@ -46,22 +46,45 @@ class Agent:
 		# Multiply by reward for selling the max available cars
 		self.Exp_R += R_sale*P_tails
 
+		## Create Transition Probabilities Cars[cars_i, cars_j] -> Probability Array[end_i, end_j]
+
+		## 1.) Consider car reduction due to sales
+		# Reverse P_sale, since ending up with 0 cars requires selling all cars, i.e. last idx
+		# Pad zeros because selling doesn't add cars / can't surpass cars_i
+		P_T_sale_i = np.array([P_sale_i.flatten()[i::-1].tolist() + [0]*(20-i) for i in range(21)])
+		# Add P(sale > cars_i) to P(end_i = 0)
+		P_T_sale_i[:,0] += P_tails_i.flatten()
+		# P_T_i[1] -> [0.95, 0.05, 0, ...]
+		# i.e. if cars_i == 0, then P(end_i=0) = 95% and P(end_i=1) = 5%
+
+		## 2.) Consider car increase due to returns
+		# If we are at cars_i, then P(cars_i-1) = 0 and P(cars_i+0) ~ Pois.pmf(x=0, mu=3)
 		
-		## Create Transition Probabilities Cars[cars_i, cars_j] -> Probability Array[cars_i, cars_j]
-		P_T_i = P_sale_i
-		# Create "rolling" probability. If we are at cars_i, then P(cars_i-1) = 0 and P(cars_i+0) ~ Pois.pmf(x=0, mu=3)
-		
-		P_T_i = np.array([[0]*i + poisson.pmf(range(21-i), mu=3).tolist() for i in range(21)])
-		P_T_j = np.array([[0]*j + poisson.pmf(range(21-j), mu=3).tolist() for j in range(21)])
+		P_T_return_i = np.array([[0]*i + poisson.pmf(range(21-i), mu=3).tolist() for i in range(21)])
+		# Add P(returns + cars_i > 20) to P(cars_i = 20)
+		P_T_return_i[:,-1] += 1-poisson.cdf(range(20, -1, -1), mu=3)
+
+		# To create transition T(cars_i=1), we need to add the 95% from end_i=0 5% of end_i=1
+		# I.e. we need to sum 0.95*P_T_return_i[0] + 0.05*P_T_return_i[1]
+		P_T_i = np.array([(P_T_sale_i[car_i]*P_T_return_i.T).sum(axis=1) for car_i in range(21)])
+
+		# Do for j as we did for i
+		P_T_sale_j = np.array([P_sale_j.flatten()[j::-1].tolist() + [0]*(20-j) for j in range(21)])
+		P_T_sale_j[:,0] += P_tails_j.flatten()
+
+		P_T_return_j = np.array([[0]*j + poisson.pmf(range(21-j), mu=3).tolist() for j in range(21)])
+		P_T_return_j[:,-1] += 1-poisson.cdf(range(20, -1, -1), mu=3)
+		P_T_j = np.array([(P_T_sale_j[car_j]*P_T_return_j.T).sum(axis=1) for car_j in range(21)])
+
+		# Combine so we can index P_T[cars_i, cars_j]
+		P_T = np.array([[P_T_i[i:i+1].T @ P_T_j[j:j+1] for j in range(21)] for i in range(21)])
 		
 
 
 
-		P_return_j = poisson.pmf(range(21), mu=2).reshape(1, 21)
-		P_return = np.ones((21, 21, 21, 21))*P_sale_i*P_sale_j
 		
 		
-
+		'''
 		## We need to change the reward to also consider cars being returned
 		# P(total_i, total_j | start_i-move_i+move_j, start_j-move_j+move_i)
 		# P(total_i, total_j | cars_i, cars_j)
@@ -110,6 +133,7 @@ class Agent:
 								for move_i in range(6)] \
 								for start_j in range(21)] \
 								for start_i in range(21)])
+'''
 
 	def R(self, cars_i, cars_j, move_i, move_j):
 		cars_i += move_j - move_i
