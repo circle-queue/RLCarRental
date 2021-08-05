@@ -19,9 +19,10 @@ def pois(n, y, cache={}):
 
 class Agent:
 	def __init__(self):
+		self.Exp_R = [[]] # Rewards
+		self.P_T = [[]] # Transition Probabilities
+		self.Exp_V = np.zeros((21, 21))
 		self.R_MOVE = -2
-		self.Exp_R = None # Rewards
-		self.T = None # Transition Probabilities
 		R_RENT = 10 
 		
 		## Create Expected reward[total_cars_i][total_cars_j] -> float
@@ -73,102 +74,53 @@ class Agent:
 		P_T_sale_j[:,0] += P_tails_j.flatten()
 
 		P_T_return_j = np.array([[0]*j + poisson.pmf(range(21-j), mu=3).tolist() for j in range(21)])
-		P_T_return_j[:,-1] += 1-poisson.cdf(range(20, -1, -1), mu=3)
+		P_T_return_j[:,-1] += 1-poisson.cdf(range(20, -1, -1), mu=2)
 		P_T_j = np.array([(P_T_sale_j[car_j]*P_T_return_j.T).sum(axis=1) for car_j in range(21)])
 
 		# Combine so we can index P_T[cars_i, cars_j]
-		P_T = np.array([[P_T_i[i:i+1].T @ P_T_j[j:j+1] for j in range(21)] for i in range(21)])
-		
-
-
+		self.P_T = np.array([[P_T_i[i:i+1].T @ P_T_j[j:j+1] for j in range(21)] for i in range(21)])
 
 		
 		
-		'''
-		## We need to change the reward to also consider cars being returned
-		# P(total_i, total_j | start_i-move_i+move_j, start_j-move_j+move_i)
-		# P(total_i, total_j | cars_i, cars_j)
-		# Get P of cars_i + 0, cars_i + 1, (...), 19, 20
-		# Then add probabilities for P(total_i > 20)
 
-		# Could be seen as shifting a filter {P(returned cars)} over the [value]
-		# E.g., value.shape = (3, 3) and cars_i=1 and cars_j=0
-
-		# [[  0, { 9, 15], _ }
-		#  [  8, {17, 24], _ }
-		#  [ 11, {21, 29]] _ }
-		# Above: The multiplication is only done on value[0:, 1:] and P(returned)[:3, :2]
-
-		## Probability of 0-20 cars returning
-		P_return = P_return_cars()
-
-		# If we have 19 cars and add 2, we can still get sales for 20 cars
-		# Use CDF, e.g.: [0.05 0.2  0.42 0.65 0.82 0.92 0.97 0.99 1.   1.   1.   1.   1.   1.   1.   1.   1.   1.   1.   1.   1.  ] 
-		# CDF[cars_i=2] means we have used 42% of the probabilities, and not yet accounted for the remaining
-		P_return_i = P_return.sum(axis=1)
-		P_return_j = P_return.sum(axis=0)
-		CDF_i = np.cumsum(P_return_i)
-		CDF_j = np.cumsum(P_return_j)
-
-		# R2 should include rewards from cars that are returned
-		R2 = np.zeros((21, 21))
-		for cars_i, cars_j in product(range(21), range(21)):
-			end_i, end_j = 21 - cars_i, 21 - cars_j
-			p_left_i = (1-CDF_i[end_i-1])
-			p_left_j = (1-CDF_j[end_j-1])
-			overflow = (p_left_i*P_return_j[:end_j]*Exp_R[20, cars_j:]).sum() \
-					 + (p_left_j*P_return_i[:end_i]*Exp_R[cars_i:, 20]).sum() \
-					 + (p_left_i*p_left_j*Exp_R[20, 20])
-			R2[cars_i, cars_j] = overflow + (Exp_R[cars_i:, cars_j:]*P_return[:end_i, :end_j]).sum()
-
-		# self.R[start_i][start_j][move_i][move_j]
-		self.R = np.array([[[[R_MOVE*(move_i+move_j) + \
-								R2[min(20, start_i \
-											-min(start_i, move_i) \
-											+min(start_j, move_j))]\
-								  [min(20, start_j \
-											-min(start_j, move_j) \
-											+min(start_i, move_i))] 
-								for move_j in range(6)] \
-								for move_i in range(6)] \
-								for start_j in range(21)] \
-								for start_i in range(21)])
-'''
 
 	def R(self, cars_i, cars_j, move_i, move_j):
 		cars_i += move_j - move_i
 		cars_j += move_i - move_j
 		return self.R_MOVE*(move_i+move_j) + self.Exp_R[cars_i, cars_j]
 		
-		
+	def V(self, cars_i, cars_j, move_i, move_j):
+		cars_i += move_j - move_i
+		cars_j += move_i - move_j
+		return (self.P_T[cars_i, cars_j] * self.Exp_V).sum()
 		
 	def play(self):
-		n = 100
-		V = np.zeros((21, 21))
+		n = 1
+		V2 = np.zeros((21, 21))
+		policy = np.zeros((21, 21))
 		y = 0.9
 		# V(s) = E[R + y*V(s+1)]
 
 		for epoch in range(1, n+1):
-			V2 = np.zeros((21, 21))
 			for cars_i, cars_j in product(range(21), range(21)):
-				
 				moves_i = range(1+min(20-cars_j, min(5, cars_i)))
 				moves_j = range(1+min(20-cars_i, min(5, cars_j)))
-				values = [self.R[cars_i, \
-								 cars_j, \
-								 move_i, \
-								 move_j] \
-							+ y*V[cars_i-move_i+move_j, cars_j-move_j+move_i] \
-							for move_i, move_j in product(moves_i, moves_j)]
-				V2[cars_i, cars_j] = max(values)
-			
-			#print(np.around((1/epoch)*(V2-V)))
-			V += (1/epoch)*(V2-V)
-		print(values)
-		X, Y, C = zip(*[[i, j, V[i, j]] for i, j in product(range(21), range(21))])
+				state_actions = [(cars_i, cars_j, move_i, move_j) \
+								for move_i, move_j in product(moves_i, moves_j) \
+								if move_i == 0 or move_j == 0]
+				val, a = max([(
+							self.R(*sa) + y*self.V(*sa), 
+							sa[-2:]
+							) for sa in state_actions])
+				policy[cars_i, cars_j] = a[0]-a[1]
+				V2[cars_i, cars_j] = val
+			self.Exp_V += (1/epoch)*(V2-self.Exp_V)
+		X, Y, C = zip(*[[i, j, policy[i, j]] for i, j in product(range(21), range(21))])
 		plt.scatter(X, Y, c=C, cmap='Greys')
+		plt.gcf().set_size_inches(2, 2)
+		plt.title('Cars to move. White means move from i, black means move from j')
 		#plt.show()
-		print(np.around(V))
+		#print(np.array([row[::-1] for row in policy]))
 
 A = Agent()
 A.play()
